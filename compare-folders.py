@@ -1,120 +1,90 @@
-from difflib import Differ
 import os
-from filecmp import dircmp
+import csv
+import filecmp
+import difflib
 import configparser
+import chardet
 
-def find_unique_files(dcmp):
-    uniqueFilesLeft = []
-    uniqueFilesRight = []
-    # dir1 unique files
-    if len(dcmp.left_only) != 0:
-        for filename in dcmp.left_only:
-            uniqueFilesLeft.append(dcmp.left+"/"+filename)
-    # dir2 unique files
-    if len(dcmp.right_only) != 0:
-        for filename in dcmp.right_only:
-            uniqueFilesRight.append(dcmp.right+"/"+filename)
-    # recursive call to process the sub folders
-    for sub_dcmp in dcmp.subdirs.values():
-        sub_uniques = find_unique_files(sub_dcmp)
-        uniqueFilesLeft += sub_uniques["left"]
-        uniqueFilesRight += sub_uniques["right"]
-    uniqueFilesLeft.sort()
-    uniqueFilesRight.sort()
-    return {"left": uniqueFilesLeft, "right": uniqueFilesRight}
+TEXT_EXTENSIONS = ['.html', '.htm', '.css', '.js', '.txt']
 
+def is_text_file(file_path):
+    _, ext = os.path.splitext(file_path)
+    return ext.lower() in TEXT_EXTENSIONS
 
-def build_common_files(dcmp):
-    # listing common files in dir
-    commonFiles = []
-    for filename in dcmp.common_files:
-        commonFiles.append(dcmp.left + "/" + filename)
-    # listing in sub-dirs
-    for subdir in dcmp.common_dirs:
-        subCommonFiles = build_common_files(dircmp(dcmp.left + "/" + subdir, dcmp.right + "/" + subdir))
-        for filename in subCommonFiles:
-            commonFiles.append(filename)
-    commonFiles.sort()
-    return commonFiles
+def detect_file_encoding(file_path):
+    with open(file_path, 'rb') as f:
+        raw_data = f.read()
+        result = chardet.detect(raw_data)
+        return result['encoding']
 
+def preprocess_lines(lines):
+    # Convert line endings to LF (Unix-style) for consistent comparison
+    return [line.rstrip('\r\n') + '\n' for line in lines]
 
-def print_unique_files(files, result_file):
-    count = 0
-    if len(files) != 0:
-        for filepath in files:
-            if os.path.isdir(filepath):
-                filepath += '/'
-            with open(r"%s"%(filepath), 'r') as fp:
-                for count, line in enumerate(fp):
-                    pass
-            f = open("%s"%(result_file),'a+')
-            f.write('%s,%s\n'%(filepath,count + 1))
+def count_changed_lines(file1, file2):
+    encoding1 = detect_file_encoding(file1)
+    encoding2 = detect_file_encoding(file2)
 
-config = configparser.ConfigParser()
-config.read('example.ini')
-default_config = config['DEFAULT']
-print(default_config['old'])
-print(default_config['new'])
-if not os.path.isdir(default_config['old']):
-    print(default_config['old'] + " is not a valid directory")
-    exit(-1)
-if not os.path.isdir(default_config['new']):
-    print(default_config['new'] + " is not a valid directory")
-    exit(-1)
+    with open(file1, 'r', encoding=encoding1, errors='replace') as f1, \
+         open(file2, 'r', encoding=encoding2, errors='replace') as f2:
+        lines1 = preprocess_lines(f1.readlines())
+        lines2 = preprocess_lines(f2.readlines())
 
-print("Analyzing directories...")
-dcmp = dircmp(default_config['old'], default_config['new'])
-uniqueFiles = find_unique_files(dcmp)
+    differ = difflib.Differ()
+    diff = differ.compare(lines1, lines2)
+    changed_lines = sum(1 for line in diff if line.startswith('+ ') or line.startswith('- '))
 
-print("Building common files list...")
-commonFiles = build_common_files(dcmp)
-relativePathsCommonFiles = []
-for filename in commonFiles:  # removing the root folder
-    relativePathsCommonFiles.append(filename[len(default_config['old'])+1:])
+    return changed_lines
 
-filesDifferent = []
-print("Searching for file differences by computing hashes...\n")
-for filepath in relativePathsCommonFiles:
-    open("changed_files_list.csv",'w+')
-    filepathLeft = default_config['old'] + "/" + filepath
-    filepathRight = default_config['new'] + "/" + filepath
-    line_no = 1
-    count = 0
-    file_1 = open(filepathLeft, 'r', encoding="UTF-8")    
-    file_2 = open(filepathRight, 'r', encoding="UTF-8")
+def count_lines(file_path):
+    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+        return len(f.readlines())
     
-    file_1_line = file_1.readline()
-    file_2_line = file_2.readline()
- 
-    while file_1_line != '' or file_2_line != '':
- 
-        # Removing whitespaces
-        file_1_line = file_1_line.rstrip()
-        file_2_line = file_2_line.rstrip()
-    
-        # Compare the lines from both file
-        if file_1_line != file_2_line:
-            count += 1
-        file_1_line = file_1.readline()
-        file_2_line = file_2.readline()
-    
-        line_no += 1
-    
-    f = open("changed_files_list.csv",'a+')
-    f.write('%s,%s\n'%(filepath,count))
+def compare_folders(folder1, folder2):
+    results = []
 
-    file_1.close()
-    file_2.close()
-print("Changed files list report completed!\n")
+    for root, dirs, files in os.walk(folder1):
+        for file in files:
+            file1_path = os.path.join(root, file)
+            file2_path = os.path.join(folder2, os.path.relpath(file1_path, folder1))
 
-if uniqueFiles["left"]:
-    open("deleted_files_list.csv",'w+')
-    print_unique_files(uniqueFiles["left"], "deleted_files_list.csv")
-    print("Deleted files list report completed!\n")
-if uniqueFiles["right"]:
-    open("added_files_list.csv",'w+')
-    print_unique_files(uniqueFiles["right"], "added_files_list.csv")
-    print("Added files list report completed!\n")
+            if not (os.path.exists(file2_path) and filecmp.cmp(file1_path, file2_path)):
+                if is_text_file(file1_path) and is_text_file(file2_path):
+                    changed_lines = count_changed_lines(file1_path, file2_path)
+                    results.append((file1_path, file2_path, '×', changed_lines))
 
-if len(filesDifferent)+len(uniqueFiles["left"])+len(uniqueFiles["right"]) == 0:
-    print("NO DIFFERENCE FOUND :)\n")
+    for root, dirs, files in os.walk(folder2):
+        for file in files:
+            file1_path = os.path.join(root, file)
+            file2_path = os.path.join(folder1, os.path.relpath(file1_path, folder2))
+
+            if not (os.path.exists(file2_path)):
+                if is_text_file(file1_path) and is_text_file(file2_path):
+                    exclusive_lines = count_lines(file1_path)
+                    results.append((file1_path, file2_path, '○', exclusive_lines))
+
+    sum_changed_lines = sum(result[3] for result in results)
+    results.append(('変更ライン数合計:', '', sum_changed_lines))
+
+
+    return results
+
+def export_to_csv(results, output_file):
+    with open(output_file, 'w', newline='') as csvfile:
+        csv_writer = csv.writer(csvfile)
+        csv_writer.writerow(['元のコード', '新しいコード', '新しいコードのみ', '変更ライン数'])
+
+        for result in results:
+            csv_writer.writerow(result)
+
+if __name__ == '__main__':
+    config = configparser.ConfigParser()
+    config.read('example.ini')
+    default_config = config['DEFAULT']
+    folder1 = default_config['old']
+    folder2 = default_config['new']
+    output_csv = 'comparison_results.csv'
+
+    comparison_results = compare_folders(folder1, folder2)
+    export_to_csv(comparison_results, output_csv)
+    print("Comparison completed. Results exported to", output_csv)
