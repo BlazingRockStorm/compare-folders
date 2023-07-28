@@ -5,7 +5,7 @@ import difflib
 import configparser
 import chardet
 
-TEXT_EXTENSIONS = ['.html', '.htm', '.css', '.js', '.txt']
+TEXT_EXTENSIONS = ['.html', '.htm', '.css', '.js', '.txt', '.java', '.jsp', '.xsd', '.xml', '.properties', '.tag']
 
 def is_text_file(file_path):
     _, ext = os.path.splitext(file_path)
@@ -51,19 +51,19 @@ def compare_folders(folder1, folder2):
             if not (os.path.exists(file2_path) and filecmp.cmp(file1_path, file2_path)):
                 if is_text_file(file1_path) and is_text_file(file2_path):
                     changed_lines = count_changed_lines(file1_path, file2_path)
-                    results.append((file1_path, file2_path, '×', changed_lines))
+                    results.append((file1_path, file2_path, changed_lines))
 
     for root, dirs, files in os.walk(folder2):
         for file in files:
-            file1_path = os.path.join(root, file)
-            file2_path = os.path.join(folder1, os.path.relpath(file1_path, folder2))
+            file2_path = os.path.join(root, file)
+            file1_path = os.path.join(folder1, os.path.relpath(file2_path, folder2))
 
-            if not (os.path.exists(file2_path)):
-                if is_text_file(file1_path) and is_text_file(file2_path):
-                    exclusive_lines = count_lines(file1_path)
-                    results.append((file1_path, file2_path, '○', exclusive_lines))
+            if not (os.path.exists(file1_path)):
+                if is_text_file(file2_path) and is_text_file(file1_path):
+                    exclusive_lines = count_lines(file2_path)
+                    results.append(('', file2_path, exclusive_lines))
 
-    sum_changed_lines = sum(result[3] for result in results)
+    sum_changed_lines = sum(result[2] for result in results)
     results.append(('変更ライン数合計:', '', sum_changed_lines))
 
 
@@ -72,7 +72,7 @@ def compare_folders(folder1, folder2):
 def export_to_csv(results, output_file):
     with open(output_file, 'w', newline='') as csvfile:
         csv_writer = csv.writer(csvfile)
-        csv_writer.writerow(['元のコード', '新しいコード', '新しいコードのみ', '変更ライン数'])
+        csv_writer.writerow(['元のコード', '新しいコード', '変更ライン数'])
 
         for result in results:
             csv_writer.writerow(result)
